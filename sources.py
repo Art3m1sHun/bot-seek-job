@@ -159,7 +159,9 @@ async def jsearch(c: httpx.AsyncClient, q: str, location: str = "Vietnam") -> li
                     headers=headers)
     if r.status_code >= 400:
         log.warning("jsearch HTTP %s: %s", r.status_code, r.text[:300])
-    r.raise_for_status()
+        hint = {401: "khoá sai", 403: "khoá chưa đăng ký API JSearch hoặc sai địa chỉ/header",
+                404: "sai địa chỉ JSEARCH_URL", 429: "hết hạn mức"}.get(r.status_code, "")
+        raise RuntimeError(f"HTTP {r.status_code}" + (f" {hint}" if hint else "") + f": {r.text[:100]}")
     return parse_jsearch(r.json())
 
 
@@ -177,8 +179,8 @@ async def search_all(queries: list[str], location: str | None = None) -> tuple[l
                 return await fn(c, q)
             except Exception as e:  # noqa: BLE001
                 log.warning("nguồn %s lỗi: %s", name, e)
-                if name not in errors:
-                    errors.append(name)
+                if not any(x.startswith(name) for x in errors):
+                    errors.append(f"{name} [{describe_error(e)}]")
                 return []
         tasks = []
         for name, fn in AGGREGATORS.items():
