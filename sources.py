@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import re
@@ -15,6 +16,23 @@ from bs4 import BeautifulSoup
 log = logging.getLogger("jobbot.sources")
 UA = {"User-Agent": "Mozilla/5.0 (compatible; personal-job-bot/1.0)"}
 TIMEOUT = httpx.Timeout(20.0)
+# Trang công ty hay chặn User-Agent "bot", nên dùng header giống trình duyệt khi đọc trang tuyển dụng
+BROWSER = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                         "Chrome/124.0 Safari/537.36",
+           "Accept": "text/html,application/xhtml+xml,*/*;q=0.8", "Accept-Language": "vi,en;q=0.8"}
+
+
+def describe_error(e: Exception) -> str:
+    if isinstance(e, httpx.HTTPStatusError):
+        code = e.response.status_code
+        hint = {401: "cần đăng nhập", 403: "trang chặn bot", 404: "link sai hoặc đã đổi",
+                429: "bị giới hạn tốc độ", 503: "trang chặn bot hoặc đang bảo trì"}.get(code, "")
+        return f"HTTP {code}" + (f" ({hint})" if hint else "")
+    if isinstance(e, httpx.TimeoutException):
+        return "quá thời gian chờ (mạng chặn hoặc trang quá chậm)"
+    if isinstance(e, httpx.ConnectError):
+        return "không kết nối được (mạng chặn hoặc sai tên miền)"
+    return f"{type(e).__name__}: {str(e)[:80]}"
 
 
 @dataclass
@@ -221,7 +239,7 @@ async def company_jobs(c: httpx.AsyncClient, name: str, careers_url: str | None)
     except Exception as e:  # noqa: BLE001
         log.warning("ATS %s lỗi: %s", host, e)
     # Trang tự dựng: lấy các liên kết trông giống tin tuyển dụng
-    r = await c.get(careers_url)
+    r = await c.get(careers_url, headers=BROWSER)
     r.raise_for_status()
     return parse_generic_html(r.text, careers_url, name), "html"
 
@@ -231,9 +249,43 @@ NOISE = re.compile(r"^(home|about|contact|login|sign|privacy|terms|blog|news|đ�
                    r"liên hệ|giới thiệu|read more|xem thêm|apply now|view all|all jobs)\b", re.I)
 
 
+def _walk_jobposting(node, found: list):
+    if isinstance(node, list):
+        for x in node:
+            _walk_jobposting(x, found)
+    elif isinstance(node, dict):
+        t = node.get("@type")
+        if t == "JobPosting" or (isinstance(t, list) and "JobPosting" in t):
+            found.append(node)
+        for v in node.values():
+            if isinstance(v, (list, dict)):
+                _walk_jobposting(v, found)
+
+
+def parse_jsonld(soup: BeautifulSoup, base: str, company: str) -> list[Job]:
+    """Nhiều trang tuyển dụng nhúng sẵn dữ liệu chuẩn schema.org/JobPosting, kể cả trang dựng bằng JS."""
+    found: list[dict] = []
+    for tag in soup.find_all("script", type="application/ld+json"):
+        try:
+            _walk_jobposting(json.loads(tag.string or tag.get_text() or ""), found)
+        except ValueError:
+            continue
+    jobs = []
+    for n in found:
+        loc = n.get("jobLocation")
+        loc = loc[0] if isinstance(loc, list) and loc else loc
+        addr = (loc or {}).get("address", {}) if isinstance(loc, dict) else {}
+        place = addr.get("addressLocality", "") if isinstance(addr, dict) else ""
+        title = str(n.get("title", "")).strip()
+        if title:
+            jobs.append(Job(title, company, urljoin(base, n.get("url") or base), place,
+                            _text(str(n.get("description", ""))), "Trang công ty"))
+    return jobs
+
+
 def parse_generic_html(html: str, base: str, company: str) -> list[Job]:
     soup = BeautifulSoup(html, "html.parser")
-    out: dict[str, Job] = {}
+    out: dict[str, Job] = {j.id: j for j in parse_jsonld(soup, base, company)}
     for a in soup.find_all("a", href=True):
         text = a.get_text(" ", strip=True)
         href = urljoin(base, a["href"])
@@ -256,7 +308,12 @@ async def check_company(name: str, careers_url: str | None) -> tuple[list[Job], 
                 own, how = await company_jobs(c, name, careers_url)
             except Exception as e:  # noqa: BLE001
                 log.warning("trang tuyển dụng %s lỗi: %s", careers_url, e)
-                errors.append("trang tuyển dụng")
+                errors.append(f"trang tuyển dụng: {describe_error(e)}")
+            else:
+                if how == "html" and not own:
+                    errors.append("trang tuyển dụng tải được nhưng không thấy tin nào "
+                                  "(có thể danh sách dựng bằng JavaScript; thử dán link từng danh mục việc, "
+                                  "hoặc link trên Greenhouse/Lever nếu công ty dùng)")
     boards, board_errors = await search_all([name])
     key = re.sub(r"\W+", "", name.lower())
     boards = [j for j in boards if key and key in re.sub(r"\W+", "", j.company.lower())]

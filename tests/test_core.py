@@ -149,3 +149,22 @@ def test_feedback(monkeypatch, tmp_path):
     assert s.disliked_ids(1) == {"j1"} and [r["title"] for r in s.feedback(1, True)] == ["B"]
     s.set_feedback(1, "j1", "A", "X", True)
     assert s.disliked_ids(1) == set()
+
+
+def test_jsonld_jobs():
+    html = """<script type="application/ld+json">{"@context":"https://schema.org","@graph":[
+      {"@type":"JobPosting","title":"Senior QA","url":"/jobs/qa-1","description":"<p>Selenium</p>",
+       "jobLocation":{"address":{"addressLocality":"Hà Nội"}}}]}</script>
+      <script type="application/ld+json">{bad json</script>"""
+    js = parse_generic_html(html, "https://x.com/careers", "X")
+    assert len(js) == 1 and js[0].title == "Senior QA" and js[0].location == "Hà Nội"
+    assert js[0].url == "https://x.com/jobs/qa-1" and "Selenium" in js[0].description
+
+
+def test_describe_error():
+    import httpx
+    from sources import describe_error
+    req = httpx.Request("GET", "https://x.com")
+    e = httpx.HTTPStatusError("x", request=req, response=httpx.Response(403, request=req))
+    assert "403" in describe_error(e) and "chặn" in describe_error(e)
+    assert "thời gian" in describe_error(httpx.ReadTimeout("t"))
