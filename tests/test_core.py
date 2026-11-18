@@ -94,3 +94,58 @@ def test_jsearch_request_routing(monkeypatch):
             return await sources.jsearch(c, "python")
     jobs = asyncio.run(run())
     assert jobs[0].title == "Dev" and seen["key"] == "n" and "country=vn" in seen["url"]
+
+
+def test_redact():
+    import llm
+    r = llm.redact("Email a.b@gmail.com, SĐT +84 912 345 678, https://linkedin.com/in/x, 5 năm")
+    assert "gmail" not in r and "912" not in r and "linkedin" not in r and "5 năm" in r
+
+
+def _mock_claude(monkeypatch, tool_input):
+    import httpx, llm
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    seen = {}
+    def handler(req):
+        import json
+        seen["body"] = json.loads(req.content)
+        seen["key"] = req.headers["x-api-key"]
+        return httpx.Response(200, json={"content": [{"type": "tool_use", "name": seen["body"]["tool_choice"]["name"], "input": tool_input}]})
+    real = httpx.AsyncClient
+    monkeypatch.setattr(llm.httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+    return seen
+
+
+def test_llm_profile(monkeypatch):
+    import asyncio, llm
+    seen = _mock_claude(monkeypatch, {"titles": ["Data Analyst"], "skills": ["SQL", "dbt"], "seniority": "junior",
+                                      "years": 2, "search_queries": ["data analyst", "chuyên viên phân tích dữ liệu"],
+                                      "summary": "Analyst 2 năm."})
+    p = asyncio.run(llm.profile_from_cv("CV của tôi, liên hệ a@b.com " * 5))
+    assert p.skills == ["sql", "dbt"] and p.seniority == "junior" and p.extra_queries[1].startswith("chuyên")
+    assert "a@b.com" not in seen["body"]["messages"][0]["content"] and seen["key"] == "k"
+    from cv import Profile
+    assert Profile.from_dict(p.to_dict()).summary == "Analyst 2 năm."
+    assert p.queries()[0] == "data analyst"
+
+
+def test_llm_rerank(monkeypatch):
+    import asyncio, llm
+    from cv import Profile
+    from sources import Job
+    _mock_claude(monkeypatch, {"results": [{"i": 1, "score": 88, "reason": "khớp"}, {"i": 0, "score": 150, "reason": "x"},
+                                           {"i": 9, "score": 50, "reason": "ngoài phạm vi"}]})
+    jobs = [Job("A", "c", "u1", "", "d"), Job("B", "c", "u2", "", "d")]
+    r = asyncio.run(llm.rerank(Profile(["sql"], ["analyst"], 2, "s", "junior"), jobs, [("T", "C")], []))
+    assert r == {1: (88, "khớp"), 0: (100, "x")}
+
+
+def test_feedback(monkeypatch, tmp_path):
+    from store import Store
+    s = Store(str(tmp_path / "f.db"))
+    s.set_feedback(1, "j1", "A", "X", False)
+    s.set_feedback(1, "j2", "B", "Y", True)
+    s.set_feedback(1, "j1", "A", "X", False)
+    assert s.disliked_ids(1) == {"j1"} and [r["title"] for r in s.feedback(1, True)] == ["B"]
+    s.set_feedback(1, "j1", "A", "X", True)
+    assert s.disliked_ids(1) == set()

@@ -17,6 +17,9 @@ class Store:
             CREATE TABLE IF NOT EXISTS company(
               id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, name TEXT, careers_url TEXT,
               UNIQUE(user_id, name));
+            CREATE TABLE IF NOT EXISTS feedback(
+              user_id INTEGER, job_id TEXT, title TEXT, company TEXT, liked INTEGER,
+              PRIMARY KEY(user_id, job_id));
             CREATE TABLE IF NOT EXISTS seen(company_id INTEGER, job_id TEXT, PRIMARY KEY(company_id, job_id));
             """)
 
@@ -39,6 +42,22 @@ class Store:
     def delete_cv(self, user_id: int) -> bool:
         with self._db() as db:
             return db.execute("DELETE FROM cv WHERE user_id=?", (user_id,)).rowcount > 0
+
+    def set_feedback(self, user_id: int, job_id: str, title: str, company: str, liked: bool) -> None:
+        with self._db() as db:
+            db.execute("INSERT INTO feedback VALUES(?,?,?,?,?) ON CONFLICT(user_id,job_id) "
+                       "DO UPDATE SET liked=excluded.liked",
+                       (user_id, job_id, title, company, int(liked)))
+
+    def feedback(self, user_id: int, liked: bool, limit: int = 10) -> list[sqlite3.Row]:
+        with self._db() as db:
+            return db.execute("SELECT job_id, title, company FROM feedback WHERE user_id=? AND liked=? "
+                              "ORDER BY rowid DESC LIMIT ?", (user_id, int(liked), limit)).fetchall()
+
+    def disliked_ids(self, user_id: int) -> set[str]:
+        with self._db() as db:
+            return {r["job_id"] for r in db.execute(
+                "SELECT job_id FROM feedback WHERE user_id=? AND liked=0", (user_id,))}
 
     def add_company(self, user_id: int, name: str, url: str | None) -> None:
         with self._db() as db:

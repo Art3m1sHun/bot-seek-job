@@ -19,7 +19,8 @@ import discord
 from discord import app_commands
 from dotenv import load_dotenv
 
-from cv import build_profile, extract_text
+import llm
+from cv import Profile, build_profile, extract_text
 from matcher import score
 from sources import Job, check_company, search_all
 from store import Store
@@ -65,13 +66,15 @@ def bar(s: int) -> str:
     return "█" * (s // 10) + "░" * (10 - s // 10) + f" {s}%"
 
 
-def job_line(j: Job, s: int | None = None, matched: list[str] | None = None) -> str:
+def job_line(j: Job, s: int | None = None, matched: list[str] | None = None, reason: str = "") -> str:
     head = f"**[{j.title[:90]}]({j.url})**" if j.url else f"**{j.title[:90]}**"
     meta = " · ".join(x for x in [j.company, j.location[:40], j.source] if x)
     out = f"{head}\n{meta}"
     if s is not None:
         out += f"\n`{bar(s)}`"
-    if matched:
+    if reason:
+        out += f"\n_{reason}_"
+    elif matched:
         out += " " + ", ".join(matched[:6])
     return out
 
@@ -88,6 +91,48 @@ async def send_embeds(inter: discord.Interaction, title: str, lines: list[str], 
         embeds[-1].set_footer(text=footer)
     for i in range(0, len(embeds), 10):
         await inter.followup.send(embeds=embeds[i:i + 10], ephemeral=ephemeral)
+
+
+class FeedbackSelect(discord.ui.Select):
+    def __init__(self, placeholder: str, options: list[discord.SelectOption], liked: bool):
+        super().__init__(placeholder=placeholder, min_values=1, max_values=len(options), options=options)
+        self.liked = liked
+
+    async def callback(self, inter: discord.Interaction):
+        view: "FeedbackView" = self.view  # type: ignore[assignment]
+        for jid in self.values:
+            j = view.jobs[jid]
+            store.set_feedback(view.user_id, j.id, j.title, j.company, self.liked)
+        msg = "Đã ghi nhận. Các tin 👎 sẽ không hiện lại, bot dùng các tin bạn đánh giá để chấm lần sau." \
+            if not self.liked else "Đã ghi nhận. Bot dùng các tin bạn thích để chấm lần sau."
+        await inter.response.send_message(msg, ephemeral=True)
+
+
+class FeedbackView(discord.ui.View):
+    def __init__(self, user_id: int, jobs: list[Job]):
+        super().__init__(timeout=1800)
+        self.user_id = user_id
+        self.jobs = {j.id: j for j in jobs}
+        opts = [discord.SelectOption(label=f"{i + 1}. {j.title}"[:100], value=j.id,
+                                     description=(j.company[:100] or None)) for i, j in enumerate(jobs)]
+        self.add_item(FeedbackSelect("👍 Tin hợp với tôi", opts, True))
+        self.add_item(FeedbackSelect("👎 Tin không hợp (ẩn đi)", opts, False))
+
+
+async def send_jobs(inter: discord.Interaction, title: str, items: list[tuple[str, Job]], footer: str = ""):
+    """Mỗi tin nhắn gồm 10 tin (2 embed) kèm ô chọn 👍/👎 để bot học."""
+    for n, i in enumerate(range(0, len(items), 10)):
+        chunk = items[i:i + 10]
+        embeds = []
+        for k in range(0, len(chunk), 5):
+            e = discord.Embed(title=title if (n == 0 and k == 0) else None, colour=0x5865F2,
+                              description="\n\n".join(f"**{i + k + m + 1}.** {line}"
+                                                       for m, (line, _) in enumerate(chunk[k:k + 5])))
+            embeds.append(e)
+        if footer and i + 10 >= len(items):
+            embeds[-1].set_footer(text=footer)
+        await inter.followup.send(embeds=embeds, view=FeedbackView(inter.user.id, [j for _, j in chunk]),
+                                  ephemeral=True)
 
 
 @bot.tree.command(name="cv", description="Gửi CV/resume (.pdf, .docx, .txt) để bot ghi nhớ")
@@ -107,6 +152,17 @@ async def cv_cmd(inter: discord.Interaction, file: discord.Attachment):
         return await inter.followup.send(
             "Không trích được chữ từ file (có thể là CV dạng ảnh/scan). Hãy dùng PDF có chọn được chữ hoặc .docx.")
     p = build_profile(text)
+    ai_note = ""
+    if llm.enabled():
+        try:
+            ai = await llm.profile_from_cv(text)
+            p = Profile(skills=list(dict.fromkeys(ai.skills + p.skills)),
+                        titles=list(dict.fromkeys(ai.titles + p.titles)), years=ai.years if ai.years is not None else p.years,
+                        summary=ai.summary, seniority=ai.seniority, extra_queries=ai.extra_queries)
+            ai_note = "\n🤖 Đã dùng AI đọc CV."
+        except Exception as e:  # noqa: BLE001
+            log.warning("AI đọc CV lỗi: %s", e)
+            ai_note = "\n⚠️ AI đọc CV lỗi, tạm dùng cách so từ khoá."
     if not p.skills and not p.titles:
         return await inter.followup.send(
             "Đọc được file nhưng không nhận ra kỹ năng nào trong từ điển. Thử `/timviec tu_khoa:...` để tự nhập từ khoá.")
@@ -114,7 +170,9 @@ async def cv_cmd(inter: discord.Interaction, file: discord.Attachment):
     await inter.followup.send(
         f"Đã lưu CV **{file.filename}**.\n**Kỹ năng:** {', '.join(p.skills[:20]) or '—'}\n"
         f"**Chức danh:** {', '.join(p.titles[:5]) or '—'}\n**Kinh nghiệm:** "
-        f"{str(p.years) + ' năm' if p.years else 'không rõ'}\n\nGõ `/timviec` để tìm việc.")
+        f"{str(p.years) + ' năm' if p.years else 'không rõ'}"
+        + (f"\n**Cấp bậc:** {p.seniority}\n**Tóm tắt:** {p.summary}" if p.summary else "")
+        + f"{ai_note}\n\nGõ `/timviec` để tìm việc.")
 
 
 @bot.tree.command(name="hoso", description="Xem hồ sơ bot đã rút ra từ CV")
@@ -124,7 +182,7 @@ async def hoso(inter: discord.Interaction):
         return await inter.response.send_message("Bạn chưa gửi CV. Dùng `/cv`.", ephemeral=True)
     name, p = r
     await inter.response.send_message(
-        f"**{name}**\nKỹ năng: {', '.join(p.skills) or '—'}\nChức danh: {', '.join(p.titles) or '—'}\n"
+        f"**{name}**\n{p.summary + chr(10) if p.summary else ''}Cấp bậc: {p.seniority or 'không rõ'}\nKỹ năng: {', '.join(p.skills) or '—'}\nChức danh: {', '.join(p.titles) or '—'}\n"
         f"Kinh nghiệm: {p.years or 'không rõ'}", ephemeral=True)
 
 
@@ -150,24 +208,47 @@ async def timviec(inter: discord.Interaction, tu_khoa: str | None = None, dia_di
     if dia_diem:
         d = dia_diem.lower()
         jobs = [j for j in jobs if not j.location or d in j.location.lower() or d in j.title.lower()]
-    ranked = []
+    hidden = store.disliked_ids(inter.user.id)
+    jobs = [j for j in jobs if j.id not in hidden]
+    kw = []
     for j in jobs:
         s, m = score(profile, j.title, j.description)
         if tu_khoa and tu_khoa.lower() in (j.title + " " + j.description).lower():
             s = min(100, s + 15)
-        if s >= MIN_SCORE:
-            ranked.append((s, j, m))
-    ranked.sort(key=lambda x: -x[0])
+        kw.append((s, j, m))
+    kw.sort(key=lambda x: -x[0])
+
     note = f"Nguồn không truy cập được: {', '.join(errors)}." if errors else ""
     if not (os.getenv("SERPAPI_KEY", "").strip() or os.getenv("RAPIDAPI_KEY", "").strip() or os.getenv("OPENWEBNINJA_KEY", "").strip()):
         note += " Chưa có OPENWEBNINJA_KEY, RAPIDAPI_KEY hoặc SERPAPI_KEY nên chưa quét LinkedIn/Indeed/TopCV."
+
+    ranked = None  # list[(điểm, job, dòng phụ)]
+    if llm.enabled() and kw:
+        pool = [j for _, j, _ in kw[:40]]
+        liked = [(r["title"], r["company"]) for r in store.feedback(inter.user.id, True)]
+        disliked = [(r["title"], r["company"]) for r in store.feedback(inter.user.id, False)]
+        try:
+            res = await llm.rerank(profile, pool, liked, disliked)
+            ranked = [(res[i][0], pool[i], res[i][1]) for i in range(len(pool)) if i in res]
+            note += " 🤖 Chấm bằng AI."
+        except Exception as e:  # noqa: BLE001
+            log.warning("AI chấm điểm lỗi: %s", e)
+            note += " ⚠️ AI chấm điểm lỗi, dùng điểm so từ khoá."
+    if ranked is None:
+        ranked = [(s, j, "") for s, j, m in kw]
+        matched = {j.id: m for _, j, m in kw}
+        ranked = [(s, j, ", ".join(matched[j.id][:6])) for s, j, _ in ranked]
+    ranked = [x for x in ranked if x[0] >= MIN_SCORE]
+    ranked.sort(key=lambda x: -x[0])
+
     if not ranked:
         return await inter.followup.send(
             f"Quét {len(jobs)} tin nhưng chưa có tin nào đạt {MIN_SCORE}% phù hợp. {note}\n"
             "Thử thêm `tu_khoa`, bỏ `dia_diem`, hoặc hạ `MIN_SCORE` trong `.env`.")
     top = ranked[:so_luong]
-    await send_embeds(inter, f"🎯 {len(top)} việc hợp CV nhất (quét {len(jobs)} tin)",
-                      [job_line(j, s, m) for s, j, m in top], footer=note)
+    await send_jobs(inter, f"🎯 {len(top)} việc hợp CV nhất (quét {len(jobs)} tin)",
+                    [(job_line(j, s, None, why), j) for s, j, why in top],
+                    footer=(note.strip() + " Dùng ô chọn bên dưới để 👍/👎, bot sẽ học từ đó.").strip())
 
 
 @bot.tree.command(name="congty_them", description="Thêm công ty muốn theo dõi")

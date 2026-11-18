@@ -39,7 +39,15 @@ Mọi trả lời đều ẩn (chỉ mình bạn thấy). CV và danh sách côn
 **Không cào trực tiếp LinkedIn/Indeed/TopCV**: các trang này chặn bot và cấm cào trong điều khoản, nên bot lấy tin của chúng qua Google Jobs. Google Jobs không phủ hết mọi tin, nhất là tin chỉ đăng riêng trên TopCV. Muốn thêm, viết hàm mới trong `sources.py` và đăng ký vào `AGGREGATORS`.
 
 ## Cách chấm điểm
-Bot dò từ điển ~100 kỹ năng (`cv.py`) trong CV. Mỗi tin được chấm: kỹ năng có trong **tiêu đề** tính nặng hơn trong **mô tả**, cộng thêm nếu chức danh khớp. Chỉ hiện tin ≥ `MIN_SCORE` (mặc định 25). Đây là so khớp từ khoá, không phải AI. Kỹ năng ngoài từ điển sẽ không được nhận, sửa `SKILLS` để bổ sung.
+**Mặc định (không cần khoá):** dò từ điển ~100 kỹ năng trong CV, chấm tin theo kỹ năng trùng ở tiêu đề/mô tả. Đây chỉ là so khớp từ khoá, không phân biệt cấp bậc hay hiểu ngữ cảnh.
+
+**Có `ANTHROPIC_API_KEY` (khuyên dùng):**
+- `/cv`: Claude đọc CV, rút chức danh mục tiêu, kỹ năng bất kỳ (không giới hạn từ điển), cấp bậc, số năm và các từ khoá tìm việc tiếng Anh/Việt.
+- `/timviec`: bot lấy 40 tin ứng viên tốt nhất rồi Claude chấm lại từng tin theo ngữ cảnh (lệch cấp bậc, khác lĩnh vực bị trừ điểm), kèm lý do ngắn.
+- **Học từ phản hồi:** dưới mỗi nhóm tin có hai ô chọn 👍 và 👎. Tin 👎 sẽ không hiện lại; các tin 👍/👎 gần đây được đưa vào lời nhắc để AI hiểu gu của bạn.
+- Chi phí rất nhỏ với model mặc định `claude-haiku-5-5` (vài nghìn token mỗi lần `/timviec`).
+- **Quyền riêng tư:** nội dung CV được gửi tới Anthropic để xử lý. Bot tự bỏ email, số điện thoại và link trước khi gửi, nhưng tên và nơi làm việc trong CV vẫn có thể còn. Không đặt khoá thì không gửi gì cả.
+
 CV dạng ảnh/scan không đọc được chữ, hãy dùng PDF có chọn được chữ hoặc .docx.
 
 ## Test

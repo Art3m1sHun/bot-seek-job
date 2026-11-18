@@ -50,21 +50,27 @@ class Profile:
     skills: list[str] = field(default_factory=list)
     titles: list[str] = field(default_factory=list)
     years: int | None = None
+    summary: str = ""
+    seniority: str = ""
+    extra_queries: list[str] = field(default_factory=list)  # từ khoá tìm việc do AI gợi ý
 
     def to_dict(self) -> dict:
-        return {"skills": self.skills, "titles": self.titles, "years": self.years}
+        return {"skills": self.skills, "titles": self.titles, "years": self.years,
+                "summary": self.summary, "seniority": self.seniority,
+                "extra_queries": self.extra_queries}
 
     @classmethod
     def from_dict(cls, d: dict) -> "Profile":
-        return cls(d.get("skills", []), d.get("titles", []), d.get("years"))
+        return cls(d.get("skills", []), d.get("titles", []), d.get("years"),
+                   d.get("summary", ""), d.get("seniority", ""), d.get("extra_queries", []))
 
     def queries(self, limit: int = 6) -> list[str]:
-        """Từ khoá để tìm việc: chức danh trước, rồi các kỹ năng đứng đầu."""
-        out = list(self.titles[:3]) + self.skills[:limit]
+        """Từ khoá để tìm việc: gợi ý của AI, rồi chức danh, rồi các kỹ năng đứng đầu."""
+        out = list(self.extra_queries[:4]) + list(self.titles[:3]) + self.skills[:limit]
         seen, res = set(), []
         for q in out:
-            if q not in seen:
-                seen.add(q)
+            if q.lower() not in seen:
+                seen.add(q.lower())
                 res.append(q)
         return res[:limit]
 
