@@ -71,3 +71,26 @@ def test_jsearch_parse():
     js = parse_jsearch(data)
     assert len(js) == 2 and js[0].source == "LinkedIn" and "Remote" in js[0].location
     assert js[1].url == "https://a.b/c" and parse_jsearch({"data": None}) == []
+
+
+def test_jsearch_request_routing(monkeypatch):
+    import asyncio, httpx
+    import sources
+    for k in ("OPENWEBNINJA_KEY", "RAPIDAPI_KEY", "JSEARCH_URL", "JSEARCH_KEY_HEADER"):
+        monkeypatch.delenv(k, raising=False)
+    assert sources.jsearch_request() is None
+    monkeypatch.setenv("RAPIDAPI_KEY", "r")
+    assert sources.jsearch_request()[1]["X-RapidAPI-Key"] == "r"
+    monkeypatch.setenv("OPENWEBNINJA_KEY", "n")
+    url, h = sources.jsearch_request()
+    assert url.startswith("https://api.openwebninja.com/") and h == {"x-api-key": "n"}
+
+    seen = {}
+    def handler(req):
+        seen["url"], seen["key"] = str(req.url), req.headers.get("x-api-key")
+        return httpx.Response(200, json={"data": [{"job_title": "Dev", "employer_name": "A"}]})
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
+            return await sources.jsearch(c, "python")
+    jobs = asyncio.run(run())
+    assert jobs[0].title == "Dev" and seen["key"] == "n" and "country=vn" in seen["url"]

@@ -29,6 +29,7 @@ python bot.py
 Mọi trả lời đều ẩn (chỉ mình bạn thấy). CV và danh sách công ty lưu theo từng người dùng trong `jobs.db` trên máy chạy bot.
 
 ## Nguồn dữ liệu
+- **JSearch qua OpenWeb Ninja**: copy API key ở https://app.openwebninja.com rồi dán vào `OPENWEBNINJA_KEY` trong `.env`. Địa chỉ mặc định `https://api.openwebninja.com/jsearch/search`, header `x-api-key`. Nếu trong tài liệu của họ khác, chỉnh bằng `JSEARCH_URL` và `JSEARCH_KEY_HEADER`. Có cả hai khoá thì ưu tiên OpenWeb Ninja.
 - **JSearch (RapidAPI)**, nguồn LinkedIn/Indeed/Glassdoor không cần số điện thoại: vào https://rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch → **Subscribe to Test** → chọn gói **Basic (Free)** → copy **X-RapidAPI-Key** (hiện ở khung code mẫu) → dán vào `RAPIDAPI_KEY` trong `.env`. Mỗi truy vấn tốn 1 request; xem hạn mức gói miễn phí trên trang đó.
 - **LinkedIn, Indeed, TopCV, ITviec và nhiều trang khác** qua **Google Jobs (SerpApi)**: đặt `SERPAPI_KEY` trong `.env` là bật. Mỗi `/timviec` tốn tối đa 3 lượt, mỗi công ty kiểm tra tốn 1 lượt (gói miễn phí ~100 lượt/tháng). Kết quả ghi rõ tin đến từ trang nào và có link ứng tuyển.
 - Sàn tổng hợp: **Remotive, Arbeitnow, RemoteOK** (API công khai, thiên về việc remote/nước ngoài) và **VietnamWorks** (API nội bộ không chính thức, có thể hỏng khi họ đổi).

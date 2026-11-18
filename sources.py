@@ -115,16 +115,32 @@ def parse_jsearch(data: dict) -> list[Job]:
     return [j for j in out if j.title]
 
 
+def jsearch_request() -> tuple[str, dict] | None:
+    """Chọn nơi gọi JSearch theo khoá bạn có. Ưu tiên OpenWeb Ninja, sau đó RapidAPI.
+    Có thể chỉnh bằng JSEARCH_URL / JSEARCH_KEY_HEADER nếu nhà cung cấp đổi."""
+    ninja = os.getenv("OPENWEBNINJA_KEY", "").strip()
+    rapid = os.getenv("RAPIDAPI_KEY", "").strip()
+    if ninja:
+        return (os.getenv("JSEARCH_URL", "https://api.openwebninja.com/jsearch/search"),
+                {os.getenv("JSEARCH_KEY_HEADER", "x-api-key"): ninja})
+    if rapid:
+        return (os.getenv("JSEARCH_URL", "https://jsearch.p.rapidapi.com/search"),
+                {"X-RapidAPI-Key": rapid, "X-RapidAPI-Host": "jsearch.p.rapidapi.com"})
+    return None
+
+
 async def jsearch(c: httpx.AsyncClient, q: str, location: str = "Vietnam") -> list[Job]:
-    """JSearch (RapidAPI): gom Google Jobs, LinkedIn, Indeed, Glassdoor..."""
-    key = os.getenv("RAPIDAPI_KEY", "").strip()
-    if not key:
+    """JSearch: gom Google Jobs, LinkedIn, Indeed, Glassdoor..."""
+    req = jsearch_request()
+    if not req:
         return []
+    url, headers = req
     country = os.getenv("JSEARCH_COUNTRY", "vn")
     query = q if not location or location.lower() == "vietnam" else f"{q} in {location}"
-    r = await c.get("https://jsearch.p.rapidapi.com/search",
-                    params={"query": query, "page": 1, "num_pages": 1, "country": country},
-                    headers={"X-RapidAPI-Key": key, "X-RapidAPI-Host": "jsearch.p.rapidapi.com"})
+    r = await c.get(url, params={"query": query, "page": 1, "num_pages": 1, "country": country},
+                    headers=headers)
+    if r.status_code >= 400:
+        log.warning("jsearch HTTP %s: %s", r.status_code, r.text[:300])
     r.raise_for_status()
     return parse_jsearch(r.json())
 
@@ -156,7 +172,7 @@ async def search_all(queries: list[str], location: str | None = None) -> tuple[l
             loc = location or os.getenv("JOB_LOCATION", "Vietnam")
             tasks += [run("google_jobs", lambda cl, q, loc=loc: google_jobs(cl, q, loc), q)
                       for q in queries[:3]]
-        if os.getenv("RAPIDAPI_KEY", "").strip():
+        if jsearch_request():
             # mỗi truy vấn tốn 1 request → chỉ lấy 3 từ khoá đầu
             loc = location or os.getenv("JOB_LOCATION", "Vietnam")
             tasks += [run("jsearch", lambda cl, q, loc=loc: jsearch(cl, q, loc), q)

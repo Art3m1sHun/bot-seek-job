@@ -150,8 +150,8 @@ async def timviec(inter: discord.Interaction, tu_khoa: str | None = None, dia_di
             ranked.append((s, j, m))
     ranked.sort(key=lambda x: -x[0])
     note = f"Nguồn không truy cập được: {', '.join(errors)}." if errors else ""
-    if not (os.getenv("SERPAPI_KEY", "").strip() or os.getenv("RAPIDAPI_KEY", "").strip()):
-        note += " Chưa có RAPIDAPI_KEY hoặc SERPAPI_KEY nên chưa quét LinkedIn/Indeed/TopCV."
+    if not (os.getenv("SERPAPI_KEY", "").strip() or os.getenv("RAPIDAPI_KEY", "").strip() or os.getenv("OPENWEBNINJA_KEY", "").strip()):
+        note += " Chưa có OPENWEBNINJA_KEY, RAPIDAPI_KEY hoặc SERPAPI_KEY nên chưa quét LinkedIn/Indeed/TopCV."
     if not ranked:
         return await inter.followup.send(
             f"Quét {len(jobs)} tin nhưng chưa có tin nào đạt {MIN_SCORE}% phù hợp. {note}\n"
