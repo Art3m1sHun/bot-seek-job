@@ -44,9 +44,18 @@ class Bot(discord.Client):
         if GUILD_ID.isdigit():
             g = discord.Object(int(GUILD_ID))
             self.tree.copy_global_to(guild=g)
-            await self.tree.sync(guild=g)
-        else:
-            await self.tree.sync()
+            try:
+                await self.tree.sync(guild=g)
+                return
+            except discord.Forbidden:
+                log.warning("Không vào được server GUILD_ID=%s (bot chưa được mời vào server đó, hoặc "
+                            "ID sai). Bỏ qua GUILD_ID, đăng ký lệnh toàn cầu (có thể mất tới 1 giờ để hiện).",
+                            GUILD_ID)
+        await self.tree.sync()
+
+    async def on_ready(self):
+        log.info("Bot sẵn sàng: %s, đang ở %d server: %s", self.user, len(self.guilds),
+                 ", ".join(f"{g.name} ({g.id})" for g in self.guilds) or "chưa ở server nào")
 
 
 bot = Bot()
